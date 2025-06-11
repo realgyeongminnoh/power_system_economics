@@ -51,7 +51,7 @@ def solve_uc_formulation_0(
 
     #
     p = model.addVars(range(num_units), range(num_periods), lb=0, ub=p_ub.tolist())
-    
+
     if not example_1:
         r = model.addVars(range(num_units), range(num_periods), lb=0, ub=r_ub.tolist())
     else:
@@ -79,13 +79,6 @@ def solve_uc_formulation_0(
         p[i, t]
         >=
         u[i, t] * p_min[i]
-        for i in range(num_units)
-        for t in range(num_periods)
-    )
-    model.addConstrs(
-        p[i, t] + r[i, t]
-        >=
-        p[i, t]
         for i in range(num_units)
         for t in range(num_periods)
     )
