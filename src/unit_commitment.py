@@ -299,6 +299,7 @@ def solve_uc_formulation_0(
 def solve_uc_formulation_1(
     input_uc: Input_uc,
     output_uc: Output_uc,
+    reserve: float,
     verbose: bool = False,
     Heuristics: float = 1,
     _is_inside_iter: bool = False,
@@ -554,7 +555,7 @@ def solve_uc_formulation_1(
     model.tune()
     if model.TuneResultCount:
         model.getTuneResult(0)
-        model.write("gurobi_tuned.prm")
+        model.write(f"tuning_{reserve}.prm")
         print("***********************************")
 
     model.optimize()
