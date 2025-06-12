@@ -3,8 +3,11 @@ from dataclasses import dataclass
 
 
 @dataclass
-class Input_uc:   
-
+class Input_uc:
+    unit_type: np.ndarray
+    idx_nuclear: np.ndarray
+    idx_coal: np.ndarray
+    idx_lng: np.ndarray
     num_units: int
     num_periods: int
     #########################
@@ -24,10 +27,16 @@ class Input_uc:
     cost_lin: np.ndarray
     cost_const: np.ndarray
     #########################
-    cost_startup_step: np.ndarray
-    num_cooling_steps: np.ndarray
+    cost_startup_step_formulation_0: list
+    num_cooling_steps_formulation_0: np.ndarray
+    cost_startup_step_formulation_1: np.ndarray
+    step_length_formulation_1: np.ndarray
     #########################
     p_prev: np.ndarray
     u_prev: np.ndarray
-    min_up_prev: np.ndarray
-    min_down_prev: np.ndarray
+    min_up_r: np.ndarray
+    min_down_r: np.ndarray
+    min_up_0: np.ndarray
+    min_down_0: np.ndarray
+    ##########################
+    example_1: bool = False
