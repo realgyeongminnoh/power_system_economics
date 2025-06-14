@@ -44,6 +44,14 @@ def solve_uc_formulation_0(
     ### MODEL DECLARATION
     model = gp.Model()
     model.setParam("OutputFlag", verbose)
+    model.setParam("OutputFlag", verbose)
+    model.setParam("Symmetry", 2)
+    model.setParam("PreDual", 2)
+    model.setParam("Presolve", 1)
+    model.setParam("PreSparsify", 2)
+    model.setParam("Disconnected", 2)
+    model.setParam("Heuristics", 1)
+    model.setParam("ProjImpliedCuts", 2)
 
     ###VARIABLE DECLARATION
     # helper - pseudo ub
@@ -63,6 +71,10 @@ def solve_uc_formulation_0(
     # helper - deletion
     del p_ub, r_ub, cost_startup_ub
     gc.collect()
+
+    for i in input_uc.idx_nuclear.tolist() + input_uc.idx_lng.tolist():
+        for t in range(num_periods):
+            r[i, t].ub = 0
 
     ### CONSTRAINTS
     # helper - negative index (initial condition) access function
@@ -132,7 +144,324 @@ def solve_uc_formulation_0(
             for t in range(num_periods)
             for tau in range(1, num_cooling_steps_formulation_0[i] + 1)
         )
+    # RAMP
+    model.addConstrs(
+        p[i, t] + r[i, t]- p_minus_proof(i, t - 1)
+        <=
+        ramp_up[i] * u_minus_proof(i, t - 1)
+        + startup_ramp[i] * (u[i, t] - u_minus_proof(i, t - 1))
+        + p_max[i] * (1 - u[i, t])
+        for i in range(num_units)
+        for t in range(num_periods)        
+    )
+    # RAMP
+    model.addConstrs(
+        p[i, t] + r[i, t]
+        <=
+        p_max[i] * u[i, t + 1]
+        + shutdown_ramp[i] * (u[i, t] - u[i, t + 1])
+        for i in range(num_units)
+        for t in range(num_periods - 1)
+    )
+    # RAMP
+    model.addConstrs(
+        p_minus_proof(i, t - 1) - p[i, t]
+        <=
+        ramp_down[i] * u[i, t]
+        + shutdown_ramp[i] * (u_minus_proof(i, t - 1) - u[i, t])
+        + p_max[i] * (1 - u_minus_proof(i, t - 1))
+        for i in range(num_units)
+        for t in range(num_periods - 1)        
+    )
+    # MINIMUM UP-TIME
+    model.addConstrs(
+        gp.quicksum(
+            1 - u[i, t]
+            for t in range(min_up_r[i])
+        )
+        ==
+        0
+        for i in range(num_units)
+    )
+    # MINIMUM UP-TIME
+    model.addConstrs(
+        gp.quicksum(
+            u[i, t_delta]
+            for t_delta in range(t, t + min_up[i])
+        )
+        >=
+        min_up[i] * (
+            u[i, t] - u_minus_proof(i, t - 1)
+        )
+        for i in range(num_units)
+        for t in range(min_up_r[i], num_periods - min_up[i] + 1)
+    )
+    # MINIMUM UP-TIME
+    model.addConstrs(
+        gp.quicksum(
+            u[i, t_delta]
+            for t_delta in range(t, num_periods)
+        )
+        >=
+        (num_periods - t) * (
+            u[i, t] - u_minus_proof(i, t - 1)
+        )
+        for i in range(num_units)
+        for t in range(num_periods - min_up[i] + 1, num_periods)
+    )
+    # MINIMUM DOWN-TIME
+    model.addConstrs(
+        gp.quicksum(
+            u[i, t]
+            for t in range(min_down_r[i])
+        )
+        ==
+        0
+        for i in range(num_units)
+    )
+    # MINIMUM DOWN-TIME
+    model.addConstrs(
+        gp.quicksum(
+            1 - u[i, t_delta]
+            for t_delta in range(t, t + min_down[i])
+        )
+        >=
+        min_down[i] * (
+            u_minus_proof(i, t - 1) - u[i, t]
+        )
+        for i in range(num_units)
+        for t in range(min_down_r[i], num_periods - min_down[i] + 1)
+    )
+    # MINIMUM DOWN-TIME
+    model.addConstrs(
+        gp.quicksum(
+            1 - u[i, t_delta]
+            for t_delta in range(t, num_periods)
+        )
+        >=
+        (num_periods - t) * (
+            u_minus_proof(i, t - 1) - u[i, t]
+        )
+        for i in range(num_units)
+        for t in range(num_periods - min_down[i] + 1, num_periods)
+    )
 
+    ### OBJECTIVE
+    # 
+    total_cost_generation = gp.quicksum(
+        cost_lin[i] * p[i, t]
+        + cost_const[i] * u[i, t]
+        for i in range(num_units)
+        for t in range(num_periods)
+    )
+    #
+    total_cost_startup = gp.quicksum(
+        cost_startup[i, t]
+        for i in range(num_units)
+        for t in range(num_periods)
+    )
+    #
+    total_cost = total_cost_generation + total_cost_startup
+    model.setObjective(total_cost, gp.GRB.MINIMIZE)
+    model.optimize()
+
+    ### OUTPUT & RE-RUN FOR MARGINAL PRICES
+    #
+    if model.Status != gp.GRB.OPTIMAL:
+        raise NotImplementedError(f"{model.Status}")
+    #
+    if not _is_inside_iter:
+        output_uc.u = np.array(model.getAttr("X", u).select()).reshape(num_units, num_periods).astype(np.int64)
+        output_uc.p = np.array(model.getAttr("X", p).select()).reshape(num_units, num_periods)
+        output_uc.r = np.array(model.getAttr("X", r).select()).reshape(num_units, num_periods)
+        output_uc.cost_startup_it = np.array(model.getAttr("X", cost_startup).select()).reshape(num_units, num_periods)
+
+        output_uc.generation = output_uc.p.sum(axis=0)
+        output_uc.reserve = output_uc.r.sum(axis=0)
+
+        output_uc.total_cost = total_cost.getValue()
+
+        output_uc.cost_generation = (output_uc.p.transpose() * cost_lin + output_uc.u.transpose() * cost_const).transpose().sum(axis=0)
+        output_uc.total_cost_generation = total_cost_generation.getValue()
+
+        output_uc.cost_startup = output_uc.cost_startup_it.sum(axis=0)
+        output_uc.total_cost_startup = total_cost_startup.getValue()
+
+        del model
+        gc.collect()
+        solve_uc_formulation_0(input_uc=input_uc, output_uc=output_uc, _is_inside_iter=True)
+    #
+    if _is_inside_iter:
+        output_uc.marginal_price_generation = np.array([constr_generation[t].Pi for t in range(num_periods)])
+        output_uc.cost_retailer = (output_uc.p * output_uc.marginal_price_generation).sum(axis=0)
+        output_uc.total_cost_retailer = float(output_uc.cost_retailer.sum())
+
+        output_uc.marginal_price_reserve = np.array([constr_reserve[t].Pi for t in range(num_periods)])
+        output_uc.cost_reserve = (output_uc.r * output_uc.marginal_price_reserve).sum(axis=0)
+        output_uc.total_cost_reserve = float(output_uc.cost_reserve.sum())
+        
+        output_uc.cost = output_uc.cost_generation + output_uc.cost_startup + output_uc.cost_reserve
+        output_uc.total_cost += output_uc.total_cost_reserve
+
+
+import gc
+import numpy as np
+import gurobipy as gp
+
+from .input import Input_uc
+from .output import Output_uc
+
+
+def solve_uc_formulation_00(
+    input_uc: Input_uc,
+    output_uc: Output_uc,
+    verbose: bool = False,
+    _is_inside_iter: bool = False,
+):
+    ### ATTRIBUTE LOCALIZATION & GUROBIPY-FRIENDLY TYPE CONVERSION
+    # meta
+    num_units = input_uc.num_units
+    num_periods = input_uc.num_periods
+    # system
+    demand = input_uc.demand.tolist()
+    reserve = input_uc.reserve.tolist()
+    renewable = input_uc.renewable.tolist()
+    # generator
+    p_min = input_uc.p_min.tolist()
+    p_max = input_uc.p_max.tolist()
+    ramp_up = input_uc.ramp_up.tolist()
+    ramp_down = input_uc.ramp_down.tolist()
+    startup_ramp = input_uc.startup_ramp.tolist()
+    shutdown_ramp = input_uc.shutdown_ramp.tolist()
+    min_up = input_uc.min_up.tolist()
+    min_down = input_uc.min_down.tolist()
+    # cost function - generation
+    cost_lin = input_uc.cost_lin.tolist()
+    cost_const = input_uc.cost_const.tolist()
+    # cost function - startup
+    cost_startup_step_formulation_0 = input_uc.cost_startup_step_formulation_0
+    num_cooling_steps_formulation_0 = input_uc.num_cooling_steps_formulation_0.tolist()
+    # initial conditions
+    p_prev = input_uc.p_prev.tolist()
+    u_prev = input_uc.u_prev.tolist()
+    min_up_r = input_uc.min_up_r.tolist()
+    min_down_r = input_uc.min_down_r.tolist()
+
+    ### MODEL DECLARATION
+    model = gp.Model()
+    model.setParam("OutputFlag", verbose)
+    model.setParam("OutputFlag", verbose)
+    model.setParam("Symmetry", 2)
+    model.setParam("PreDual", 2)
+    model.setParam("Presolve", 1)
+    model.setParam("PreSparsify", 2)
+    model.setParam("Disconnected", 2)
+    model.setParam("Heuristics", 1)
+    model.setParam("ProjImpliedCuts", 2)
+
+    ###VARIABLE DECLARATION
+    # helper - pseudo ub
+    p_ub = np.tile(np.array(input_uc.p_max)[:, None], reps=input_uc.num_periods)
+    r_ub = p_ub - np.tile(np.array(input_uc.p_min)[:, None], reps=input_uc.num_periods)
+    cost_startup_ub = [[float(max(csc_i))] * input_uc.num_periods for csc_i in input_uc.cost_startup_step_formulation_0]
+    # decision variables
+    p = model.addVars(range(num_units), range(num_periods), lb=0, ub=p_ub.tolist())
+    r = model.addVars(range(num_units), range(num_periods), lb=0, ub=r_ub.tolist())
+    if not _is_inside_iter:
+        u = model.addVars(range(num_units), range(num_periods), vtype=gp.GRB.BINARY)
+        cost_startup = model.addVars(range(num_units), range(num_periods), lb=0, ub=cost_startup_ub)
+    # binary decision variables fix for marginal price computation
+    else:
+        u = gp.tupledict({(i, t): int(output_uc.u[i, t]) for i in range(num_units) for t in range(num_periods)})
+        cost_startup = gp.tupledict({(i, t): float(output_uc.cost_startup_it[i, t]) for i in range(num_units) for t in range(num_periods)})
+    # helper - deletion
+    del p_ub, r_ub, cost_startup_ub
+    gc.collect()
+    
+    for i in input_uc.idx_nuclear.tolist() + input_uc.idx_lng.tolist():
+        for t in range(num_periods):
+            r[i, t].ub = 0
+
+    ### CONSTRAINTS
+    # helper - negative index (initial condition) access function
+    def p_minus_proof(i, t_):
+        return p[i, t_] if t_ >= 0 else p_prev[i]
+    def u_minus_proof(i, t_):
+        return u[i, t_] if t_ >= 0 else u_prev[i][t_]
+    #
+    model.addConstrs(
+        u[i, t] * p_min[i]
+        <=
+        p[i, t]
+        for i in range(num_units)
+        for t in range(num_periods)
+    )
+    #
+    model.addConstrs(
+        p[i, t] + r[i, t]
+        <=
+        u[i, t] * p_max[i]
+        for i in range(num_units)
+        for t in range(num_periods)
+    )
+    #
+    # model.addConstrs(
+    #     r[i, t]
+    #     <=
+    #     u[i, t] * (p_max[i] - p_min[i])
+    #     for i in range(num_units)
+    #     for t in range(num_periods)
+    # )
+    #
+    constr_generation = model.addConstrs(
+        gp.quicksum(
+            p[i, t]
+            for i in range(num_units)
+        )
+        + renewable[t]
+        ==
+        demand[t]
+        for t in range(num_periods)
+    )
+    #
+    if not _is_inside_iter:
+        constr_reserve = model.addConstrs(
+            gp.quicksum(
+                r[i, t]
+                for i in range(num_units)
+            )
+            >=
+            reserve[t]
+            for t in range(num_periods)
+        )
+    else:
+        output_uc_reserve = output_uc.reserve.tolist()
+        constr_reserve = model.addConstrs(
+            gp.quicksum(
+                r[i, t]
+                for i in range(num_units)
+            )
+            ==
+            output_uc_reserve[t]
+            for t in range(num_periods)
+        )
+    #
+    if not _is_inside_iter:
+        model.addConstrs(
+            cost_startup[i, t]
+            >=
+            cost_startup_step_formulation_0[i][tau - 1] * (
+                u[i, t]
+                -
+                gp.quicksum(
+                    u_minus_proof(i, t - t_delta)
+                    for t_delta in range(1, tau + 1)
+                )
+            )
+            for i in range(num_units)
+            for t in range(num_periods)
+            for tau in range(1, num_cooling_steps_formulation_0[i] + 1)
+        )
     # RAMP
     model.addConstrs(
         p[i, t] + r[i, t]- p_minus_proof(i, t - 1)
@@ -294,20 +623,20 @@ def solve_uc_formulation_0(
 
 
 
-
-
 def solve_uc_formulation_1(
     input_uc: Input_uc,
     output_uc: Output_uc,
-    reserve: float,
     verbose: bool = False,
-    Heuristics: float = 1,
+    test: bool = False,
     _is_inside_iter: bool = False,
 ):
     ### ATTRIBUTE LOCALIZATION & GUROBIPY-FRIENDLY TYPE CONVERSION
     # meta
     num_units = input_uc.num_units
     num_periods = input_uc.num_periods
+    idx_lng = input_uc.idx_lng
+    idx_nuclear = input_uc.idx_nuclear
+
     # system
     demand = input_uc.demand.tolist()
     reserve = input_uc.reserve.tolist()
@@ -337,23 +666,46 @@ def solve_uc_formulation_1(
     ### MODEL DECLARATION
     model = gp.Model() # below param can ensure better (smaller) objval than no param. the change in objval from default is >0.01% though
     model.setParam("OutputFlag", verbose)
-    # model.setParam("Symmetry", 2) # okay but its 100% safe at least
-    # model.setParam("PreDual", 2) # 100% safe and v good
-    # model.setParam("Presolve", 1) # speed boost v good but obj value increase; this is eaten up by the others
-    # model.setParam("PreSparsify", 2) # v good with objval decrease
-    # model.setParam("Disconnected", 2) # okay and 100% safe at least
-    # model.setParam("Heuristics", Heuristics) # good probably idk at this point; gambling its good 51% times (in speed); objval improvement 100% + feasibility
-    # model.setParam("ProjImpliedCuts", 2) # gambling 77% ; extremely v good for only large reserve big problem
+    model.setParam("Symmetry", 2) # okay but its 100% safe at least
+    model.setParam("PreDual", 2) # 100% safe and v good
+    model.setParam("Presolve", 1) # speed boost v good but obj value increase; this is eaten up by the others
+    model.setParam("PreSparsify", 2) # v good with objval decrease
+    model.setParam("Disconnected", 2) # okay and 100% safe at least
+    model.setParam("Heuristics", 1) # good probably idk at this point; gambling its good 51% times (in speed); objval improvement 100% + feasibility
+    model.setParam("ProjImpliedCuts", 2) # gambling 77% ; extremely v good for only large reserve big problem
 
+    # # new findings - if this is uncommented the formulation 1 and 2 will have the exact p and u match
+    # # cost computation is slightly different not sure which; but formulation 1 is mathematically identical to the tight formulation paper
+    model.setParam("MIPGap", 0)
+    model.setParam("MIPGapAbs", 0)
+    model.setParam("IntFeasTol", 1e-9)
+    model.setParam("FeasibilityTol", 1e-9)
+    model.setParam("OptimalityTol", 1e-9)
 
-    ###VARIABLE DECLARATION
+    ### VARIABLE DECLARATION
     # helper - pseudo ub
-    ub_pseudo = np.tile(np.array(input_uc.p_max - input_uc.p_min)[:, None], reps=input_uc.num_periods)
+    p_tight_ub_pseudo = np.tile(np.array(input_uc.p_max - input_uc.p_min)[:, None], reps=num_periods)
+    r_ub_pseudo = p_tight_ub_pseudo.copy()
+    # r_ub_pseudo[idx_nuclear, :] = 0
     # decision variables
-    p_tight = model.addVars(range(num_units), range(num_periods), lb=0, ub=ub_pseudo.tolist())
-    r = model.addVars(range(num_units), range(num_periods), lb=0, ub=ub_pseudo.tolist())
+
+
+    u_lb_pseudo = np.zeros((num_units, num_periods), dtype=np.int64)
+    u_ub_pseudo = np.ones((num_units, num_periods), dtype=np.int64)
+    
+    for i in range(num_units):
+        # CONSTRAINT - MINIMUM UP-TIME
+        for t in range(min_up_r[i]):
+            u_lb_pseudo[i, t] = 1
+        # CONSTRAINT - MINIMUM DOWN-TIME
+        for t in range(min_down_r[i]):
+            u_ub_pseudo[i, t] = 0
+
+
+    p_tight = model.addVars(range(num_units), range(num_periods), lb=0, ub=p_tight_ub_pseudo.tolist())
+    r = model.addVars(range(num_units), range(num_periods), lb=0, ub=r_ub_pseudo.tolist())
     if not _is_inside_iter:
-        u = model.addVars(range(num_units), range(num_periods), vtype=gp.GRB.BINARY)
+        u = model.addVars(range(num_units), range(num_periods), vtype=gp.GRB.BINARY, lb=u_lb_pseudo, ub=u_ub_pseudo)
         v = model.addVars(range(num_units), range(num_periods), vtype=gp.GRB.BINARY)
         w = model.addVars(range(num_units), range(num_periods), vtype=gp.GRB.BINARY)
         delta = model.addVars(range(num_units), range(num_periods), range(3), vtype=gp.GRB.BINARY)
@@ -364,9 +716,12 @@ def solve_uc_formulation_1(
         w = gp.tupledict({(i, t): int(output_uc.w[i, t]) for i in range(num_units) for t in range(num_periods)})
         delta = gp.tupledict({(i, t, s): int(output_uc.delta[i, t, s]) for i in range(num_units) for t in range(num_periods) for s in range(3)})
     # helper - deletion
-    del ub_pseudo
+    del p_tight_ub_pseudo, r_ub_pseudo, u_lb_pseudo, u_ub_pseudo
     gc.collect()
-    
+
+
+
+
     ### CONSTRAINTS
     # helper - negative index (initial condition) access function
     def p_tight_minus_proof(i, t_):
@@ -410,15 +765,27 @@ def solve_uc_formulation_1(
         for t in range(num_periods)
     )
     #
-    constr_reserve = model.addConstrs(
-        gp.quicksum(
-            r[i, t]
-            for i in range(num_units)
+    if not _is_inside_iter:
+        constr_reserve = model.addConstrs(
+            gp.quicksum(
+                r[i, t]
+                for i in range(num_units)
+            )
+            >=
+            reserve[t]
+            for t in range(num_periods)
         )
-        >=
-        reserve[t]
-        for t in range(num_periods)
-    )
+    else:
+        output_uc_reserve = output_uc.reserve.tolist()
+        constr_reserve = model.addConstrs(
+            gp.quicksum(
+                r[i, t]
+                for i in range(num_units)
+            )
+            ==
+            output_uc_reserve[t]
+            for t in range(num_periods)
+        )
     #
     if not _is_inside_iter:
         #
@@ -502,13 +869,13 @@ def solve_uc_formulation_1(
     )
     #
     if not _is_inside_iter:
-        for i in range(num_units):
-            # MINIMUM UP-TIME
-            for t in range(min_up_r[i]):
-                u[i,t].lb = u[i,t].ub = 1
-            # MINIMUM DOWN-TIME
-            for t in range(min_down_r[i]):
-                u[i,t].lb = u[i,t].ub = 0
+        # for i in range(num_units):
+        #     # MINIMUM UP-TIME
+        #     for t in range(min_up_r[i]):
+        #         u[i,t].lb = u[i,t].ub = 1
+        #     # MINIMUM DOWN-TIME
+        #     for t in range(min_down_r[i]):
+        #         u[i,t].lb = u[i,t].ub = 0
         # (6)
         model.addConstrs(
             gp.quicksum(
@@ -547,17 +914,9 @@ def solve_uc_formulation_1(
         for t in range(num_periods)
         for s in range(3)
     )
-    #
+    
     total_cost = total_cost_generation + total_cost_startup
     model.setObjective(total_cost, gp.GRB.MINIMIZE)
-    
-    model.setParam("TuneTimeLimit", 3600 + 7200)
-    model.tune()
-    if model.TuneResultCount:
-        model.getTuneResult(0)
-        model.write(f"tuning_{reserve}.prm")
-        print("***********************************")
-
     model.optimize()
 
     ### OUTPUT & RE-RUN FOR MARGINAL PRICES
@@ -577,6 +936,7 @@ def solve_uc_formulation_1(
         output_uc.generation = output_uc.p.sum(axis=0)
         output_uc.reserve = output_uc.r.sum(axis=0)
 
+        output_uc.objval = total_cost.getValue()
         output_uc.total_cost = total_cost.getValue()
 
         output_uc.cost_generation = (output_uc.p.transpose() * cost_lin + output_uc.u.transpose() * cost_const).transpose().sum(axis=0)
@@ -587,9 +947,24 @@ def solve_uc_formulation_1(
 
         del model
         gc.collect()
-        solve_uc_formulation_1(input_uc=input_uc, output_uc=output_uc, _is_inside_iter=True)
+        return solve_uc_formulation_1(input_uc=input_uc, output_uc=output_uc, _is_inside_iter=True)
     #
     else:
+
+        # assume `constr_reserve` is your dict of reserve constraints, defined earlier
+        print(" t |  Req   Supplied  Slack_man  Slack_GP  Dual_price")
+        for t in range(num_periods):
+            # 1) manual slack
+            supplied = sum(var.X for var in r.select("*", t))
+            slack_man = supplied - reserve[t]
+            # 2) Gurobi’s own slack and dual
+            c        = constr_reserve[t]
+            slack_gp = c.Slack     # for >= constraint, Slack = LHS - RHS
+            dual     = c.Pi
+            print(f"{t+1:2d} | {reserve[t]:7.1f} {supplied:9.1f} {slack_man:10.1f}"
+                f"{slack_gp:9.1f} {dual:10.3f}")
+
+
         output_uc.marginal_price_generation = np.array([constr_generation[t].Pi for t in range(num_periods)])
         output_uc.cost_retailer = (output_uc.p * output_uc.marginal_price_generation).sum(axis=0)
         output_uc.total_cost_retailer = float(output_uc.cost_retailer.sum())
@@ -600,3 +975,4 @@ def solve_uc_formulation_1(
         
         output_uc.cost = output_uc.cost_generation + output_uc.cost_startup + output_uc.cost_reserve
         output_uc.total_cost += output_uc.total_cost_reserve
+        return model, constr_generation, constr_reserve
