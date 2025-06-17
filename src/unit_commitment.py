@@ -10,21 +10,25 @@ def solve_uc(
     input_uc: Input_uc,
     output_uc: Output_uc,
     verbose: bool = False,
-    turn_off_nuclear_reserve: bool = False,
-    turn_off_coal_reserve: bool = False,
-    turn_off_lng_reserve: bool = False,
     _is_inside_iter: bool = False,
+    # fun experiment
+    turn_off_nuclear_reserve: bool = False, 
+    turn_off_coal_reserve: bool = False, 
+    turn_off_lng_reserve: bool = False,
 ):
     """
     formulation from Tight and Compact MILP Formulation for the Thermal Unit Commitment Problem
     one-time recursive function call for obtaining dual values
     startup cost cooling time segments fixed to 3
+    i did try to make adjustment so that 0 startup cost are not fed into the model
+    but it somehow increased compute time so im not looking back at it
 
     input warning:
     u_prev should be column vector at least (no row vector with shape of (num_units,) but (num_units, 1))
     only the latest hour in u_prev will be accessed
-    min_up_time and min_down_time must be greater than 1 (for KPG gen. dataset it does)
+    minimum up and down times must be greater than 1 (for KPG gen. dataset it does)
     """
+
     ### ATTRIBUTE LOCALIZATION & GUROBIPY-FRIENDLY TYPE CONVERSION
     # meta
     num_units = input_uc.num_units
@@ -76,16 +80,6 @@ def solve_uc(
 
     ### VARIABLE DECLARATION
     # helper - pseudo ub
-    p_tight_ub_pseudo = np.tile(np.array(input_uc.p_max - input_uc.p_min)[:, None], reps=num_periods)
-
-    r_ub_pseudo = p_tight_ub_pseudo.copy()
-    if turn_off_nuclear_reserve:
-        r_ub_pseudo[idx_nuclear, :] = 0
-    if turn_off_coal_reserve:
-        r_ub_pseudo[idx_coal, :] = 0
-    if turn_off_lng_reserve:
-        r_ub_pseudo[idx_lng, :] = 0
-
     u_lb_pseudo = np.zeros((num_units, num_periods), dtype=np.int64)
     u_ub_pseudo = np.ones((num_units, num_periods), dtype=np.int64)
     for i in range(num_units):
@@ -95,6 +89,15 @@ def solve_uc(
         # CONSTRAINT - MINIMUM DOWN-TIME
         for t in range(min_down_r[i]):
             u_ub_pseudo[i, t] = 0
+
+    p_tight_ub_pseudo = np.tile(np.array(input_uc.p_max - input_uc.p_min)[:, None], reps=num_periods)
+    r_ub_pseudo = p_tight_ub_pseudo.copy()
+    if turn_off_nuclear_reserve:
+        r_ub_pseudo[idx_nuclear, :] = 0
+    if turn_off_coal_reserve:
+        r_ub_pseudo[idx_coal, :] = 0
+    if turn_off_lng_reserve:
+        r_ub_pseudo[idx_lng, :] = 0
 
     # decision variables
     p_tight = model.addVars(range(num_units), range(num_periods), lb=0, ub=p_tight_ub_pseudo.tolist())
@@ -127,6 +130,7 @@ def solve_uc(
         for L in step_length[i][:-1]:
             starts.append(starts[-1] + L)
         T_SU.append(starts)
+
     # 
     model.addConstrs(
         p_tight[i, t]
@@ -168,7 +172,7 @@ def solve_uc(
             for t in range(num_periods)
         )
     else:
-        output_uc_reserve = output_uc.reserve.tolist()
+        output_uc_reserve = output_uc.reserve.tolist() # first run result is used (reserve \geq reserve reg. but its slack so no reserve cost)
         constr_reserve = model.addConstrs(
             gp.quicksum(
                 r[i, t]
@@ -324,7 +328,7 @@ def solve_uc(
         output_uc.objval = total_cost.getValue()
         output_uc.total_cost = total_cost.getValue()
 
-        output_uc.cost_generation = (output_uc.p.transpose() * cost_lin + output_uc.u.transpose() * cost_const).transpose().sum(axis=0)
+        output_uc.cost_generation = (output_uc.p.transpose() * input_uc.cost_lin + output_uc.u.transpose() * input_uc.cost_const).transpose().sum(axis=0)
         output_uc.total_cost_generation = total_cost_generation.getValue()
     
         output_uc.cost_startup = np.array([(output_uc.delta[:, t, :] * input_uc.cost_startup_step).sum() for t in range(num_periods)])
@@ -332,18 +336,41 @@ def solve_uc(
 
         del model
         gc.collect()
-        solve_uc(input_uc=input_uc, output_uc=output_uc, _is_inside_iter=True)
+        solve_uc(
+            input_uc=input_uc, output_uc=output_uc, _is_inside_iter=True,
+            turn_off_nuclear_reserve=turn_off_nuclear_reserve, 
+            turn_off_coal_reserve=turn_off_coal_reserve, 
+            turn_off_lng_reserve=turn_off_lng_reserve,
+        )
     #
-    output_uc.marginal_price_generation = np.array([constr_generation[t].Pi for t in range(num_periods)])
-    output_uc.cost_retailer = (output_uc.p * output_uc.marginal_price_generation).sum(axis=0)
-    output_uc.total_cost_retailer = float(output_uc.cost_retailer.sum())
+    else:
+        output_uc.marginal_price_generation = np.array([constr_generation[t].Pi for t in range(num_periods)])
+        output_uc.cost_retailer = (output_uc.p * output_uc.marginal_price_generation).sum(axis=0)
+        output_uc.total_cost_retailer = float(output_uc.cost_retailer.sum())
 
-    output_uc.marginal_price_reserve = np.array([constr_reserve[t].Pi for t in range(num_periods)])
-    output_uc.cost_reserve = (output_uc.r * output_uc.marginal_price_reserve).sum(axis=0)
-    output_uc.total_cost_reserve = float(output_uc.cost_reserve.sum())
-    
-    output_uc.cost = output_uc.cost_generation + output_uc.cost_startup + output_uc.cost_reserve
-    output_uc.total_cost += output_uc.total_cost_reserve
+        output_uc.marginal_price_reserve = np.array([constr_reserve[t].Pi for t in range(num_periods)])
+        output_uc.cost_reserve = (output_uc.r * output_uc.marginal_price_reserve).sum(axis=0)
+        output_uc.total_cost_reserve = float(output_uc.cost_reserve.sum())
+        
+        output_uc.cost = output_uc.cost_generation + output_uc.cost_startup + output_uc.cost_reserve
+        output_uc.total_cost += output_uc.total_cost_reserve
+
+        # # reserve price (numerical) validation: dual == kpx method with opportunity cost
+        # # this is only true because i substituted avg. fuel cost with C1
+        # arr_bool = []
+        # for t in range(num_periods):
+        #     opp_cost_temp = output_uc.marginal_price_generation[t] - input_uc.cost_lin
+        #     opp_cost = np.array([max(0, opp_cost_i) for opp_cost_i in opp_cost_temp])
+            
+        #     indices_with_nonzero_r = np.where(output_uc.r[:, t] != 0)[0]
+            
+        #     if len(indices_with_nonzero_r) == 0:
+        #         if output_uc.marginal_price_reserve[0] == 0:
+        #             arr_bool.append(True) # append True if 0 == dual == kpx method with opportunity cost
+        #     else:
+        #         arr_bool.append(opp_cost[indices_with_nonzero_r[0]] == output_uc.marginal_price_reserve[t])
+
+        # print(np.all(np.array(arr_bool)))
 
 
 def solve_uc_old(
@@ -414,7 +441,7 @@ def solve_uc_old(
     # binary decision variables fix for marginal price computation
     else:
         u = gp.tupledict({(i, t): int(output_uc.u[i, t]) for i in range(num_units) for t in range(num_periods)})
-        cost_startup = gp.tupledict({(i, t): float(output_uc.cost_startup_it[i, t]) for i in range(num_units) for t in range(num_periods)})
+        cost_startup = gp.tupledict({(i, t): float(output_uc._cost_startup_it[i, t]) for i in range(num_units) for t in range(num_periods)})
     # helper - deletion
     del p_ub, r_ub, cost_startup_ub
     gc.collect()
@@ -425,6 +452,7 @@ def solve_uc_old(
         return p[i, t_] if t_ >= 0 else p_prev[i]
     def u_minus_proof(i, t_):
         return u[i, t_] if t_ >= 0 else u_prev[i][t_]
+    
     #
     model.addConstrs(
         u[i, t] * p_min[i]
@@ -628,7 +656,7 @@ def solve_uc_old(
         output_uc.u = np.array(model.getAttr("X", u).select()).reshape(num_units, num_periods).astype(np.int64)
         output_uc.p = np.array(model.getAttr("X", p).select()).reshape(num_units, num_periods)
         output_uc.r = np.array(model.getAttr("X", r).select()).reshape(num_units, num_periods)
-        output_uc.cost_startup_it = np.array(model.getAttr("X", cost_startup).select()).reshape(num_units, num_periods)
+        output_uc._cost_startup_it = np.array(model.getAttr("X", cost_startup).select()).reshape(num_units, num_periods)
 
         output_uc.generation = output_uc.p.sum(axis=0)
         output_uc.reserve = output_uc.r.sum(axis=0)
@@ -636,17 +664,17 @@ def solve_uc_old(
         output_uc.objval = total_cost.getValue()
         output_uc.total_cost = total_cost.getValue()
 
-        output_uc.cost_generation = (output_uc.p.transpose() * cost_lin + output_uc.u.transpose() * cost_const).transpose().sum(axis=0)
+        output_uc.cost_generation = (output_uc.p.transpose() * input_uc.cost_lin + output_uc.u.transpose() * input_uc.cost_const).transpose().sum(axis=0)
         output_uc.total_cost_generation = total_cost_generation.getValue()
 
-        output_uc.cost_startup = output_uc.cost_startup_it.sum(axis=0)
+        output_uc.cost_startup = output_uc._cost_startup_it.sum(axis=0)
         output_uc.total_cost_startup = total_cost_startup.getValue()
 
         del model
         gc.collect()
         solve_uc_old(input_uc=input_uc, output_uc=output_uc, _is_inside_iter=True)
     #
-    if _is_inside_iter:
+    else:
         output_uc.marginal_price_generation = np.array([constr_generation[t].Pi for t in range(num_periods)])
         output_uc.cost_retailer = (output_uc.p * output_uc.marginal_price_generation).sum(axis=0)
         output_uc.total_cost_retailer = float(output_uc.cost_retailer.sum())

@@ -28,6 +28,8 @@ class Output_uc:
     delta: np.ndarray = None
     generation: np.ndarray = None
     reserve: np.ndarray = None
+    #
+    _cost_startup_it: np.ndarray = None
 
 
 @dataclass
