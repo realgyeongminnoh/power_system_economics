@@ -11,7 +11,6 @@ class Input_uc:
     idx_nuclear: np.ndarray
     idx_coal: np.ndarray
     idx_lng: np.ndarray
-    # idx_lmao: np.ndarray
     # system
     demand: np.ndarray
     reserve: np.ndarray
@@ -29,10 +28,10 @@ class Input_uc:
     cost_lin: np.ndarray
     cost_const: np.ndarray
     # cost function - startup
-    cost_startup_step_formulation_0: list
-    num_cooling_steps_formulation_0: np.ndarray
-    cost_startup_step_formulation_1: np.ndarray
-    step_length_formulation_1: np.ndarray
+    cost_startup_step: list = None
+    step_length: np.ndarray = None
+    cost_startup_step_old: np.ndarray = None
+    num_cooling_steps_old: np.ndarray = None
     # initial conditions
     p_prev: np.ndarray
     u_prev: np.ndarray

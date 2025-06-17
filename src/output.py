@@ -9,9 +9,10 @@ class Output_uc:
     total_cost: float = None
     total_cost_generation: float = None
     total_cost_startup: float = None
-    total_cost_reserve: float = None
     total_cost_retailer: float = None
+    total_cost_reserve: float = None
     #
+    cost: np.ndarray = None
     cost_generation: np.ndarray = None
     cost_startup: np.ndarray = None
     cost_reserve: np.ndarray = None
