@@ -142,7 +142,6 @@ def plot_schedule_heatmap(
         axes[-1].set_xticklabels(xticks_temp[::-1] * -1)
 
     if save_file_name is not None:
-        print("saving")
         plt.savefig(
             Path(__file__).resolve().parents[1] / "data" / "output" / f"{save_file_name}.png",
             transparent=True,

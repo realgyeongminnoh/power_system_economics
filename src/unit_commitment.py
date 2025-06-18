@@ -11,10 +11,6 @@ def solve_uc(
     output_uc: Output_uc,
     verbose: bool = False,
     _is_inside_iter: bool = False,
-    # fun experiment
-    turn_off_nuclear_reserve: bool = False, 
-    turn_off_coal_reserve: bool = False, 
-    turn_off_lng_reserve: bool = False,
 ):
     """
     formulation from Tight and Compact MILP Formulation for the Thermal Unit Commitment Problem
@@ -33,9 +29,6 @@ def solve_uc(
     # meta
     num_units = input_uc.num_units
     num_periods = input_uc.num_periods
-    idx_nuclear = input_uc.idx_nuclear
-    idx_coal = input_uc.idx_coal
-    idx_lng = input_uc.idx_lng
     # system
     demand = input_uc.demand.tolist()
     reserve = input_uc.reserve.tolist()
@@ -92,12 +85,6 @@ def solve_uc(
 
     p_tight_ub_pseudo = np.tile(np.array(input_uc.p_max - input_uc.p_min)[:, None], reps=num_periods)
     r_ub_pseudo = p_tight_ub_pseudo.copy()
-    if turn_off_nuclear_reserve:
-        r_ub_pseudo[idx_nuclear, :] = 0
-    if turn_off_coal_reserve:
-        r_ub_pseudo[idx_coal, :] = 0
-    if turn_off_lng_reserve:
-        r_ub_pseudo[idx_lng, :] = 0
 
     # decision variables
     p_tight = model.addVars(range(num_units), range(num_periods), lb=0, ub=p_tight_ub_pseudo.tolist())
@@ -338,9 +325,6 @@ def solve_uc(
         gc.collect()
         solve_uc(
             input_uc=input_uc, output_uc=output_uc, _is_inside_iter=True,
-            turn_off_nuclear_reserve=turn_off_nuclear_reserve, 
-            turn_off_coal_reserve=turn_off_coal_reserve, 
-            turn_off_lng_reserve=turn_off_lng_reserve,
         )
     #
     else:

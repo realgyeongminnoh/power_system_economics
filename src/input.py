@@ -89,6 +89,24 @@ def get_min_up_down_initials(num_units, min_up, min_down, u_prev):
     return min_up_r, min_down_r, min_up_0, min_down_0
 
 
+class Input_suc:
+    def __init__(
+        self,
+        demand_fore: np.ndarray,
+        renewable_fore: np.ndarray,
+        num_scenarios: int,
+        demand_scenario: np.ndarray,
+        renewable_scenario: np.ndarray,
+        voll: int = 3500000, 
+    ):
+        self.voll = voll
+        self.demand_fore = demand_fore
+        self.renewable_fore = renewable_fore
+        self.num_scenarios = num_scenarios
+        self.demand_scenario = demand_scenario
+        self.renewable_scenario = renewable_scenario
+
+
 @dataclass
 class Input_ed:
     pass
