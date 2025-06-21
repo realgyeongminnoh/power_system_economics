@@ -33,5 +33,10 @@ class Output_uc:
 
 
 @dataclass
+class Output_suc:
+    pass
+
+
+@dataclass
 class Output_ed:
     pass

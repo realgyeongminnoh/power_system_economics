@@ -65,7 +65,7 @@ def solve_uc(
     model.setParam("Disconnected", 2) # okay and 100% safe at least
     model.setParam("Heuristics", 1) # good probably idk at this point; gambling its good 51% times (in speed); objval improvement 100% + feasibility
     model.setParam("ProjImpliedCuts", 2) # gambling 77% ; extremely v good for only large reserve big problem
-    # model.setParam("MIPGap", 0)
+    # model.setParam("MIPGap", 0) # turned off for q3
     # model.setParam("MIPGapAbs", 0)
     # model.setParam("IntFeasTol", 1e-9)
     # model.setParam("FeasibilityTol", 1e-9)
@@ -357,6 +357,137 @@ def solve_uc(
         # print(np.all(np.array(arr_bool)))
 
 
+def solve_uc_snapshot(
+    input_uc: Input_uc,
+    output_uc: Output_uc,
+    verbose: bool = False,
+    _is_inside_iter: bool = False,
+):
+    ### ATTRIBUTE LOCALIZATION & GUROBIPY-FRIENDLY TYPE CONVERSION
+    # meta
+    num_units = input_uc.num_units
+    num_periods = input_uc.num_periods
+    # system
+    demand = input_uc.demand.tolist()
+    renewable = input_uc.renewable.tolist()
+    # generator
+    p_min = input_uc.p_min.tolist()
+    p_max = input_uc.p_max.tolist()
+    # cost function - generation
+    cost_lin = input_uc.cost_lin.tolist()
+    cost_const = input_uc.cost_const.tolist()
+
+    ### MODEL DECLARATION
+    model = gp.Model() # below param can ensure better (smaller) objval than no param. the change in objval from default is >0.01% though
+    model.setParam("OutputFlag", verbose)
+    model.setParam("Symmetry", 2) # okay but its 100% safe at least
+    model.setParam("PreDual", 2) # 100% safe and v good
+    model.setParam("Presolve", 1) # speed boost v good but obj value increase; this is eaten up by the others
+    model.setParam("PreSparsify", 2) # v good with objval decrease
+    model.setParam("Disconnected", 2) # okay and 100% safe at least
+    model.setParam("Heuristics", 1) # good probably idk at this point; gambling its good 51% times (in speed); objval improvement 100% + feasibility
+    model.setParam("ProjImpliedCuts", 2) # gambling 77% ; extremely v good for only large reserve big problem
+    model.setParam("MIPGap", 0)
+    model.setParam("MIPGapAbs", 0)
+    model.setParam("IntFeasTol", 1e-9)
+    model.setParam("FeasibilityTol", 1e-9)
+    model.setParam("OptimalityTol", 1e-9)
+
+    ### VARIABLE DECLARATION
+    # helper - pseudo ub - snapshot so its all 0 1 possible range # also the steady state initial conditions there was no remaining min up/down time but anyways
+    u_lb_pseudo = np.zeros((num_units, num_periods), dtype=np.int64)
+    u_ub_pseudo = np.ones((num_units, num_periods), dtype=np.int64)
+
+    p_tight_ub_pseudo = np.tile(np.array(input_uc.p_max - input_uc.p_min)[:, None], reps=num_periods)
+    r_ub_pseudo = p_tight_ub_pseudo.copy()
+
+    # decision variables
+    p_tight = model.addVars(range(num_units), range(num_periods), lb=0, ub=p_tight_ub_pseudo.tolist())
+    if not _is_inside_iter:
+        u = model.addVars(range(num_units), range(num_periods), vtype=gp.GRB.BINARY, lb=u_lb_pseudo, ub=u_ub_pseudo)
+    # binary decision variables fix for marginal price computation
+    else:
+        u = gp.tupledict({(i, t): int(output_uc.u[i, t]) for i in range(num_units) for t in range(num_periods)})
+    # helper - deletion
+    del p_tight_ub_pseudo, r_ub_pseudo, u_lb_pseudo, u_ub_pseudo
+    gc.collect()
+
+    ### CONSTRAINTS
+    # 
+    model.addConstrs(
+        p_tight[i, t]
+        <=
+        u[i, t] * (p_max[i] - p_min[i])
+        for i in range(num_units)
+        for t in range(num_periods)
+    )
+    #
+    model.addConstrs(
+        p_tight[i, t]
+        <=
+        u[i, t] * (p_max[i] - p_min[i])
+        for i in range(num_units)
+        for t in range(num_periods)
+    )
+    # 
+    constr_generation = model.addConstrs(
+        gp.quicksum(
+            u[i, t] * p_min[i] 
+            +
+            p_tight[i, t]
+            for i in range(num_units)
+        )
+        + renewable[t]
+        ==
+        demand[t]
+        for t in range(num_periods)
+    )
+
+    ### OBJECTIVE
+    # 
+    total_cost_generation = gp.quicksum(
+        cost_lin[i] * (p_tight[i, t] + p_min[i] * u[i, t]) 
+        + cost_const[i] * u[i, t]
+        for i in range(num_units)
+        for t in range(num_periods)
+    )
+    
+    total_cost = total_cost_generation
+    model.setObjective(total_cost, gp.GRB.MINIMIZE)
+    model.optimize()
+
+    ### OUTPUT & RE-RUN FOR MARGINAL PRICES
+    #
+    if model.Status != gp.GRB.OPTIMAL:
+        raise NotImplementedError(f"{model.Status}")
+    #
+    if not _is_inside_iter:
+        output_uc.u = np.array(model.getAttr("X", u).select()).reshape(num_units, num_periods).astype(np.int64)
+        p_tight = np.array(model.getAttr("X", p_tight).select()).reshape(num_units, num_periods)
+        output_uc.p = (output_uc.u.transpose() * input_uc.p_min + p_tight.transpose()).transpose()
+    
+        output_uc.generation = output_uc.p.sum(axis=0)
+
+        output_uc.objval = total_cost.getValue()
+        output_uc.total_cost = total_cost.getValue()
+
+        output_uc.cost_generation = (output_uc.p.transpose() * input_uc.cost_lin + output_uc.u.transpose() * input_uc.cost_const).transpose().sum(axis=0)
+        output_uc.total_cost_generation = total_cost_generation.getValue()
+    
+        del model
+        gc.collect()
+        solve_uc_snapshot(
+            input_uc=input_uc, output_uc=output_uc, _is_inside_iter=True,
+        ) # to get SMP (basically fixed binaries resolve)
+    #
+    else:
+        output_uc.marginal_price_generation = np.array([constr_generation[t].Pi for t in range(num_periods)])
+        output_uc.cost_retailer = (output_uc.p * output_uc.marginal_price_generation).sum(axis=0)
+        output_uc.total_cost_retailer = float(output_uc.cost_retailer.sum())
+
+        output_uc.cost = output_uc.cost_generation
+
+
 def solve_uc_old(
     input_uc: Input_uc,
     output_uc: Output_uc,
@@ -410,6 +541,12 @@ def solve_uc_old(
     model.setParam("Disconnected", 2)
     model.setParam("Heuristics", 1)
     model.setParam("ProjImpliedCuts", 2)
+    # model.setParam("MIPGap", 0)
+    # model.setParam("MIPGapAbs", 0)
+    # model.setParam("IntFeasTol", 1e-9)
+    # model.setParam("FeasibilityTol", 1e-9)
+    # model.setParam("OptimalityTol", 1e-9)
+
 
     ###VARIABLE DECLARATION
     # helper - pseudo ub

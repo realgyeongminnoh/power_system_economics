@@ -14,6 +14,7 @@ def plot_schedule_heatmap(
     save_file_name: str = None, # no .png
     fig_height: float = 20,
     pad_rectangle: float = None,
+    do_white: bool = True,
     dpi: float = 300,
 ):
     cmap = plt.cm.jet.copy()
@@ -137,9 +138,20 @@ def plot_schedule_heatmap(
     # axes[-2].hlines(y=57, xmin=1, xmax=24, colors="black", ls="--") 
 
     if is_prev:
+        cccc= "white" if do_white else "black"
+        for ax in axes:
+            ax.tick_params(axis="both", color=cccc, width=fig_height / 10, length=fig_height / 2, pad=fig_height / 2, labelsize=fig_height * 2)
+            ax.yaxis.label.set_color(cccc)
+            ax.set_yticklabels(ax.get_yticklabels(), color=cccc)
+            ax.set_xticklabels(ax.get_xticklabels(), color=cccc)
+            for side in ["bottom", "left", "top", "right"]:
+                ax.spines[side].set_color(cccc)
+
         xticks_temp = xticks_temp[::2]
         axes[-1].set_xticks(xticks_temp)
-        axes[-1].set_xticklabels(xticks_temp[::-1] * -1)
+        axes[-1].set_xticklabels(xticks_temp[::-1] * -1, color=cccc)
+
+
 
     if save_file_name is not None:
         plt.savefig(
@@ -147,7 +159,7 @@ def plot_schedule_heatmap(
             transparent=True,
             dpi=dpi,
             pad_inches=0,
-            bbox_inches=None,
+            bbox_inches="tight",
         )
         return None
     return fig, axes

@@ -92,21 +92,68 @@ def get_min_up_down_initials(num_units, min_up, min_down, u_prev):
 class Input_suc:
     def __init__(
         self,
+        # forecast
         demand_fore: np.ndarray,
         renewable_fore: np.ndarray,
+        # meta
         num_scenarios: int,
-        demand_scenario: np.ndarray,
-        renewable_scenario: np.ndarray,
-        voll: int = 3500000, 
+        # 
+        thermal_demand_scenario: np.ndarray,
+        scenario_p_weight: np.ndarray,
+        # meta
+        voll: int = 3500000,
+        fr_margin_pu: float = 0.02,
+
     ):
+        self.fr_margin_pu = fr_margin_pu
         self.voll = voll
+        
         self.demand_fore = demand_fore
         self.renewable_fore = renewable_fore
+        
         self.num_scenarios = num_scenarios
-        self.demand_scenario = demand_scenario
-        self.renewable_scenario = renewable_scenario
+        
+        self.thermal_demand_scenario = thermal_demand_scenario
+        self.scenario_p_weight = scenario_p_weight
+
 
 
 @dataclass
 class Input_ed:
-    pass
+    u: np.ndarray # Q1
+    # meta
+    num_units: int
+    num_periods: int
+    unit_type: np.ndarray
+    idx_nuclear: np.ndarray
+    idx_coal: np.ndarray
+    idx_lng: np.ndarray
+    # system
+    demand: np.ndarray
+    reserve: np.ndarray
+    renewable: np.ndarray
+    # generator
+    p_min: np.ndarray
+    p_max: np.ndarray
+    ramp_up: np.ndarray
+    ramp_down: np.ndarray
+    startup_ramp: np.ndarray
+    shutdown_ramp: np.ndarray
+    min_up: np.ndarray
+    min_down: np.ndarray
+    # cost function - generation
+    cost_lin: np.ndarray
+    cost_const: np.ndarray
+    # initial conditions
+    p_prev: np.ndarray = None
+    u_prev: np.ndarray = None
+    min_up_r: np.ndarray = None
+    min_down_r: np.ndarray = None
+    min_up_0: np.ndarray = None
+    min_down_0: np.ndarray = None
+    # cost function - startup (paper formulation)
+    cost_startup_step: np.ndarray = None
+    step_length: np.ndarray = None
+    # cost function - startup (lecture note formulation)
+    cost_startup_step_old: list = None
+    num_cooling_steps_old: np.ndarray = None

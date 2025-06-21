@@ -8,6 +8,7 @@ from .output import Output_uc
 from .unit_commitment import solve_uc 
 
 
+# basically this is same as ipynb file Full UC (+ FULL ED) 
 # global vars (2022 7 21 was a better day than my birthday because it was hotter and more solar)
 num_units = 122
 num_periods = 24
@@ -45,7 +46,8 @@ def load_data():
 
     global demand, renewable
     demand = np.load(path_folder_processed / "demand_2022.npy")[idx_time_start:idx_time_end+1]
-    renewable = np.load(path_folder_processed / "renewable_2022.npy")[idx_time_start:idx_time_end+1]
+    renewable = np.load(path_folder_processed / "renewable_gen_2022.npy")[idx_time_start:idx_time_end+1]
+
 
 
 def get_initial_conditions(reserve_margin_ic: float, verbose: bool):
