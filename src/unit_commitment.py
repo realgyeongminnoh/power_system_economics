@@ -341,20 +341,20 @@ def solve_uc(
 
         # # reserve price (numerical) validation: dual == kpx method with opportunity cost
         # # this is only true because i substituted avg. fuel cost with C1
-        # arr_bool = []
-        # for t in range(num_periods):
-        #     opp_cost_temp = output_uc.marginal_price_generation[t] - input_uc.cost_lin
-        #     opp_cost = np.array([max(0, opp_cost_i) for opp_cost_i in opp_cost_temp])
+        arr_bool = []
+        for t in range(num_periods):
+            opp_cost_temp = output_uc.marginal_price_generation[t] - input_uc.cost_lin
+            opp_cost = np.array([max(0, opp_cost_i) for opp_cost_i in opp_cost_temp])
             
-        #     indices_with_nonzero_r = np.where(output_uc.r[:, t] != 0)[0]
+            indices_with_nonzero_r = np.where(output_uc.r[:, t] != 0)[0]
             
-        #     if len(indices_with_nonzero_r) == 0:
-        #         if output_uc.marginal_price_reserve[0] == 0:
-        #             arr_bool.append(True) # append True if 0 == dual == kpx method with opportunity cost
-        #     else:
-        #         arr_bool.append(opp_cost[indices_with_nonzero_r[0]] == output_uc.marginal_price_reserve[t])
+            if len(indices_with_nonzero_r) == 0:
+                if output_uc.marginal_price_reserve[0] == 0:
+                    arr_bool.append(True) # append True if 0 == dual == kpx method with opportunity cost
+            else:
+                arr_bool.append(opp_cost[indices_with_nonzero_r[0]] == output_uc.marginal_price_reserve[t])
 
-        # print(np.all(np.array(arr_bool)))
+        print(np.all(np.array(arr_bool)))
 
 
 def solve_uc_snapshot(
